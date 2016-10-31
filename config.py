@@ -1,0 +1,5 @@
+import os
+
+
+ELASTICSEARCH_HOSTNAME = os.getenv('ELASTICSEARCH_HOSTNAME', 'elasticsearch')
+ELASTICSEARCH_PORT = int(os.getenv('ELASTICSEARCH_PORT', '9200'))
