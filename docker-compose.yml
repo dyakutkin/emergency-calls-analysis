@@ -1,16 +1,18 @@
-elasticsearch:
-  image: elasticsearch
-  expose:
-    - "9200"
+version: "2"
 
-python:
-  image: python:3.5.2
-  volumes:
-    - ./:/code
-  working_dir: /code
-  environment:
-    - ELASTICSEARCH_HOSTNAME=elasticsearch
-    - ELASTICSEARCH_PORT=9200
-  links:
-    - elasticsearch:elasticsearch
-  command: /bin/bash -c "pip install -r requirements.txt && exec invoke run_dev"
+services:
+  elasticsearch:
+    image: elasticsearch
+    expose:
+      - "9200"
+  python:
+    image: python:3.5.2
+    volumes:
+      - ./:/code
+    working_dir: /code
+    environment:
+      - ELASTICSEARCH_HOSTNAME=elasticsearch
+      - ELASTICSEARCH_PORT=9200
+    links:
+      - elasticsearch:elasticsearch
+    command: /bin/bash -c "pip install -r requirements.txt && exec invoke run_dev"
