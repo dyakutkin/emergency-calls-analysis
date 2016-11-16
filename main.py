@@ -1,9 +1,10 @@
 import csv
 import settings
 
-import requests
+import pygeohash
 
 from dateutil.parser import parse as parse_datetime
+from geopy.geocoders import Nominatim
 from pprint import pprint
 from collections import defaultdict, OrderedDict
 
@@ -11,7 +12,9 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 from elasticsearch.exceptions import NotFoundError
 
-es = Elasticsearch(hosts=[{'host': settings.ELASTICSEARCH_HOSTNAME, 'port': settings.ELASTICSEARCH_PORT}])
+es = Elasticsearch(hosts=[{
+    'host': settings.ELASTICSEARCH_HOSTNAME,
+    'port': settings.ELASTICSEARCH_PORT}])
 
 INDEX_NAME = 'calls'
 
@@ -21,6 +24,10 @@ def get_actions(filename=settings.DATASET_FILENAME):
         reader = csv.DictReader(csv_file)
         for index, row in enumerate(reader):
             row['date'] = parse_datetime(row.pop('timeStamp')).strftime("%Y-%m-%dT%H:%M")
+            row['location'] = {
+                'lat': float(row.pop('lat')),
+                'lon': float(row.pop('lng'))
+            }
             data = {
                 '_op_type': 'index',
                 '_index': INDEX_NAME,
@@ -35,32 +42,74 @@ def initialize_data(filename=settings.DATASET_FILENAME):
     try:
         es.search(index=INDEX_NAME)
     except NotFoundError:
+        es.indices.create(index=INDEX_NAME, body={
+            "mappings": {
+                "call": {
+                    "properties": {
+                        "location": {
+                            "type": "geo_point",
+                        }
+                    }
+                }
+            }
+        })
         print('Importing data from {}...'.format(filename))
         bulk(es, get_actions(filename))
         print('Import succeeded.')
 
 
-if __name__ == '__main__':
-    initialize_data()
-    get_actions(settings.DATASET_FILENAME)
-    r = requests.get('http://elasticsearch:9200/calls/_search', json={
+def get_dict_ordered_by_value(dict_):
+    ordered_results = OrderedDict()
+    for key in sorted(dict_, key=lambda key: dict_[key], reverse=True):
+        ordered_results[key] = dict_[key]
+    return ordered_results
+
+
+def fetch_busiest_hours():
+    items = es.search(index=INDEX_NAME, doc_type='call', body={
         "aggregations": {
-            "simpleDateHistogram": {
-                "date_histogram": {
-                    "field": "date",
-                    "interval": "hour",
+                "simpleDateHistogram": {
+                    "date_histogram": {
+                        "field": "date",
+                        "interval": "hour",
+                    }
+                }
+            }
+    })['aggregations']['simpleDateHistogram']['buckets']
+    results = defaultdict(int)
+
+    for item in items:
+        time = parse_datetime(item['key_as_string'])
+        results[time.hour] += item['doc_count']
+
+    return results
+
+
+def fetch_busiest_regions():
+    items = es.search(index=INDEX_NAME, doc_type='call', body={
+        "aggregations": {
+            "towns": {
+                "geohash_grid": {
+                    "field": "location",
+                    "precision": 5
                 }
             }
         }
-    })
-    results = defaultdict(int)
-    items = r.json().get('aggregations').get('simpleDateHistogram').get('buckets')
-    print(items[0])
-    for item in items:
-        time = parse_datetime(item.get('key_as_string'))
-        results[time.hour] += item.get('doc_count')
+    })['aggregations']['towns']['buckets']
 
-    ordered_results = OrderedDict()
-    for key in sorted(results, key=lambda key: results[key], reverse=True):
-        ordered_results[key] = results[key]
-    pprint(ordered_results)
+    results = defaultdict(int)
+    geolocator = Nominatim()
+
+    for item in items:
+        lat, lon = pygeohash.decode(item['key'])
+        location = geolocator.reverse('{}, {}'.format(lat, lon))
+        results[location.address] += item['doc_count']
+
+    return results
+
+
+if __name__ == '__main__':
+    initialize_data()
+
+    pprint(get_dict_ordered_by_value(fetch_busiest_hours()))
+    pprint(get_dict_ordered_by_value(fetch_busiest_regions()))
